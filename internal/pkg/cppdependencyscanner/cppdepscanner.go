@@ -89,6 +89,7 @@ func connect(ctx context.Context, address string) (spb.CPPDepsScannerClient, *sp
 		return err
 	})
 	if err != nil {
+		conn.Close()
 		return nil, nil, err
 	}
 	return client, capabilities, nil
@@ -107,10 +108,13 @@ func isTimeoutErr(err error) bool {
 // New creates new DepsScanner.
 func New(ctx context.Context, executor executor, cacheDir, logDir string, cacheSizeMaxMb int, useDepsCache bool, depsScannerAddress, proxyServerAddress string) (DepsScanner, error) {
 	ds, err := depsscannerclient.New(ctx, executor, cacheDir, cacheSizeMaxMb, useDepsCache, logDir, depsScannerAddress, proxyServerAddress, features.GetConfig().DepsScannerConnectTimeout, connect)
-	if err != nil {
+	if err != nil && ctx.Err() == nil && depsscannerclient.CanRetryStartup(err) {
 		log.Infof("Timed out or failed connecting to dependency scanner service, restarting service once.  Error was %v", err)
-		// Try one more time if we timed out connecting to the service.
-		return depsscannerclient.New(ctx, executor, cacheDir, cacheSizeMaxMb, useDepsCache, logDir, depsScannerAddress, proxyServerAddress, features.GetConfig().DepsScannerConnectTimeout, connect)
+		// A second launch is safe only after confirmed cleanup of the first child.
+		ds, err = depsscannerclient.New(ctx, executor, cacheDir, cacheSizeMaxMb, useDepsCache, logDir, depsScannerAddress, proxyServerAddress, features.GetConfig().DepsScannerConnectTimeout, connect)
+	}
+	if err != nil {
+		return nil, err
 	}
 	return ds, err
 }
