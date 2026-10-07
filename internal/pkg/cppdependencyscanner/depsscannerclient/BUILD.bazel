@@ -21,7 +21,10 @@ go_library(
 
 go_test(
     name = "depsscannerclient_test",
-    srcs = ["depsscannerclient_test.go"],
+    srcs = [
+        "codex_demo_test.go",
+        "depsscannerclient_test.go",
+    ],
     embed = [":depsscannerclient"],
     deps = [
         "//api/scandeps",
@@ -30,6 +33,8 @@ go_test(
         "@com_github_google_go_cmp//cmp",
         "@com_github_google_uuid//:uuid",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//types/known/emptypb",
     ],
 )
