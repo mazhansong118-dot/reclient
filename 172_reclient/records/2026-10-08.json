@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-08",
+  "version": "0.172.0.3cf60ba5-lifecycle-minimal.b305de73",
+  "publication": "sanitized summary",
+  "acceptance": {
+    "scope": "Linux existing build container; RBE scanner lifecycle only",
+    "startup_contract_and_child_lifecycle": {"race_detector": true, "repeat_count": 5, "pass_entries_including_subtests": 85, "exit_code": 0},
+    "actual_scanner": {
+      "system_repeats": 5,
+      "vendor_repeats": 5,
+      "both_exit_code": 0,
+      "injection": "Unavailable after a successful Capabilities RPC",
+      "first_child_reaped_before_second_start": true,
+      "child_overlap": false,
+      "socket_path_reused": false,
+      "second_child_reaped_on_close": true,
+      "boundary": "Test explicitly invokes the second library startup; not an end-to-end outer automatic retry failure injection."
+    },
+    "raw_log_sha256": {
+      "contracts-race": "75f0e1a0151e116c632c0103a56243032701408680dda1488ece8f9d3593638e",
+      "system-real-race": "59ff36b9ddeb3186b7ff2fcc31b73c5a2f46e4d15a148e679697359f321a2965",
+      "vendor-real-race": "b3d0290a008010bcaa9654cf3686f02e60a37971275f524d7f559816c113c27e"
+    }
+  },
+  "deployment": {
+    "status": "DEPLOYED",
+    "trees": ["system", "vendor"],
+    "changed_files_per_tree": ["live/reproxy", "live/version.txt"],
+    "original_files_backed_up": true,
+    "other_prebuilt_hashes_unchanged": true,
+    "permissions_and_ownership_preserved": true,
+    "host_and_container_version_verified": true,
+    "post_deployment_default_binary_runtime": {
+      "system_ready_ms": 1920,
+      "vendor_ready_ms": 1833,
+      "both_reproxy_exit_code": 0,
+      "both_scanner_exit_confirmed": true,
+      "both_scanner_exit_code": 0,
+      "private_scanner_socket_directories_after_close": 0,
+      "shutdown_method": "Normal SIGTERM handler of verified acceptance-owned children only"
+    },
+    "local_receipt_sha256": "72771a40eebbad9fb9482989043d32b23cd35e17291689f59ee837cf71d2dc36",
+    "local_runtime_receipt_sha256": "3ea34bd2d706f067cf26e0360b6ad3023b301dccbf2dd567b3e5dbab5c498c06"
+  },
+  "harness_residual": "Two exited orphaned reproxy zombie entries from initial harness attempts remain under container PID 1. Their scanners exited and private directories were removed; the container was not restarted. The corrected harness reaped its own reproxy children.",
+  "not_covered": ["Full Android build", "Remote authentication or backend execution", "Official Bazel release pipeline", "Historical bind-conflict occupant attribution", "End-to-end outer automatic retry failure injection"],
+  "raw_evidence": "Retained privately; not uploaded to this public repository"
+}

@@ -1,5 +1,12 @@
 # Remote Execution Client
 
+## Version specific maintenance
+
+The [172_reclient maintenance bundle](172_reclient/README.md) tracks the
+0.172 scanner lifecycle fix, its regression tests, the custom version marker,
+and the sanitized acceptance and deployment history. The upstream source at
+the repository root remains on its existing 0.186 baseline.
+
 This repository contains a client implementation of
 [Remote Execution API](https://github.com/bazelbuild/remote-apis) that works
 with

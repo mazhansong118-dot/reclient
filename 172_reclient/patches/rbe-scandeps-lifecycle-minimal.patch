@@ -1,0 +1,333 @@
+diff --git a/internal/pkg/cppdependencyscanner/cppdepscanner.go b/internal/pkg/cppdependencyscanner/cppdepscanner.go
+index 6540f77..09cc22a 100644
+--- a/internal/pkg/cppdependencyscanner/cppdepscanner.go
++++ b/internal/pkg/cppdependencyscanner/cppdepscanner.go
+@@ -89,6 +89,7 @@ func connect(ctx context.Context, address string) (spb.CPPDepsScannerClient, *sp
+ 		return err
+ 	})
+ 	if err != nil {
++		conn.Close()
+ 		return nil, nil, err
+ 	}
+ 	return client, capabilities, nil
+@@ -107,10 +108,13 @@ func isTimeoutErr(err error) bool {
+ // New creates new DepsScanner.
+ func New(ctx context.Context, executor executor, cacheDir, logDir string, cacheSizeMaxMb int, useDepsCache bool, depsScannerAddress, proxyServerAddress string) (DepsScanner, error) {
+ 	ds, err := depsscannerclient.New(ctx, executor, cacheDir, cacheSizeMaxMb, useDepsCache, logDir, depsScannerAddress, proxyServerAddress, features.GetConfig().DepsScannerConnectTimeout, connect)
+-	if err != nil {
++	if err != nil && ctx.Err() == nil && depsscannerclient.CanRetryStartup(err) {
+ 		log.Infof("Timed out or failed connecting to dependency scanner service, restarting service once.  Error was %v", err)
+-		// Try one more time if we timed out connecting to the service.
+-		return depsscannerclient.New(ctx, executor, cacheDir, cacheSizeMaxMb, useDepsCache, logDir, depsScannerAddress, proxyServerAddress, features.GetConfig().DepsScannerConnectTimeout, connect)
++		// A second launch is safe only after confirmed cleanup of the first child.
++		ds, err = depsscannerclient.New(ctx, executor, cacheDir, cacheSizeMaxMb, useDepsCache, logDir, depsScannerAddress, proxyServerAddress, features.GetConfig().DepsScannerConnectTimeout, connect)
++	}
++	if err != nil {
++		return nil, err
+ 	}
+ 	return ds, err
+ }
+diff --git a/internal/pkg/cppdependencyscanner/depsscannerclient/depsscannerclient.go b/internal/pkg/cppdependencyscanner/depsscannerclient/depsscannerclient.go
+index 6120ac4..10f30f4 100644
+--- a/internal/pkg/cppdependencyscanner/depsscannerclient/depsscannerclient.go
++++ b/internal/pkg/cppdependencyscanner/depsscannerclient/depsscannerclient.go
+@@ -71,7 +71,8 @@ const (
+ 	// Named pipes are supported on Linux and Mac but for consistency we will use TCP sockets for all.
+ 	localhost = "127.0.0.1"
+ 	// 60 seconds to try and shut down gracefully, 10 seconds to hard kill
+-	shutdownTimeout = 60 * time.Second
++	shutdownTimeout        = 60 * time.Second
++	startupShutdownTimeout = time.Second
+ )
+ 
+ // DepsScannerClient wraps the dependency scanner gRPC client.
+@@ -88,6 +89,8 @@ type DepsScannerClient struct {
+ 	executor         executor
+ 	oe               outerr.OutErr
+ 	ch               chan *command.Result
++	serviceStopped   bool
++	ownedSocketDir   string
+ 	serviceRestarted time.Time
+ 	m                sync.Mutex
+ 	capabilities     *pb.CapabilitiesResponse
+@@ -115,6 +118,25 @@ var (
+ 
+ type connectFn func(ctx context.Context, address string) (pb.CPPDepsScannerClient, *pb.CapabilitiesResponse, error)
+ 
++// ErrStartupCleanup means that exit of an owned child could not be confirmed.
++// Starting a replacement in this state can overlap the original process.
++var ErrStartupCleanup = errors.New("dependency scanner startup cleanup incomplete")
++
++type startupError struct {
++	err       error
++	retryable bool
++}
++
++func (e *startupError) Error() string { return e.err.Error() }
++func (e *startupError) Unwrap() error { return e.err }
++
++// CanRetryStartup only permits transient connection failures whose owned child
++// has been reaped (or where no child was owned). Other failures are not retried.
++func CanRetryStartup(err error) bool {
++	var e *startupError
++	return errors.As(err, &e) && e.retryable && !errors.Is(err, ErrStartupCleanup)
++}
++
+ // New creates new DepsScannerClient.
+ func New(ctx context.Context, executor executor, cacheDir string, cacheFileMaxMb int, useDepsCache bool, logDir string, depsScannerAddress, proxyServerAddress string, connTimeout time.Duration, connect connectFn) (client *DepsScannerClient, err error) {
+ 	var addr string
+@@ -122,11 +144,11 @@ func New(ctx context.Context, executor executor, cacheDir string, cacheFileMaxMb
+ 		if err == nil {
+ 			return
+ 		}
+-		log.Infof("Found errors in scandeps startup, running diagnostics...")
++		log.Infof("Found errors in scandeps startup, running post-cleanup diagnostics; a removed owned endpoint is expected...")
+ 		cCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+ 		defer cancel()
+ 		in := &diagnostics.DiagnosticInputs{
+-			UDSAddr: depsScannerAddress,
++			UDSAddr: addr,
+ 		}
+ 		diagnostics.Run(cCtx, in)
+ 	}()
+@@ -143,10 +165,36 @@ func New(ctx context.Context, executor executor, cacheDir string, cacheFileMaxMb
+ 		// TODO (b/260707840): context shouldn't be a member variable. Pass in as function variable elsewhere and remote this.
+ 		ctx: ctx,
+ 	}
++	// Capture the allocated client: named return client becomes nil on failure.
++	ds := client
++	startupTime := time.Now()
++	started, retryable := false, false
++	defer func() {
++		if err == nil {
++			return // Ownership transfers to the caller only after readiness.
++		}
++		if started {
++			if cleanupErr := ds.stopService(startupShutdownTimeout); cleanupErr != nil {
++				err = errors.Join(err, fmt.Errorf("%w: %v", ErrStartupCleanup, cleanupErr))
++				// Preserve the private endpoint for diagnosis; never unlink a live child.
++				err = &startupError{err: err}
++				log.Errorf("scandeps_startup phase=cleanup_unconfirmed retry_allowed=false address=%q elapsed_ms=%d error=%v", ds.address, time.Since(startupTime).Milliseconds(), cleanupErr)
++				return
++			}
++		}
++		if ds.terminate != nil {
++			ds.terminate()
++		}
++		if cleanupErr := ds.releaseOwnedSocket(); cleanupErr != nil {
++			err = errors.Join(err, fmt.Errorf("%w: %v", ErrStartupCleanup, cleanupErr))
++		}
++		err = &startupError{err: err, retryable: retryable}
++		log.Warningf("scandeps_startup phase=failed child_started=%t exit_confirmed=%t retry_allowed=%t address=%q elapsed_ms=%d error=%v", started, ds.serviceStopped, CanRetryStartup(err), ds.address, time.Since(startupTime).Milliseconds(), err)
++	}()
+ 
+ 	if strings.HasPrefix(depsScannerAddress, "exec://") {
+ 		executable := depsScannerAddress[7:]
+-		addr, err = buildAddress(proxyServerAddress, findOpenPort)
++		addr, ds.ownedSocketDir, err = buildOwnedAddress(proxyServerAddress)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("Failed to build address for dependency scanner: %w", err)
+ 		}
+@@ -154,6 +202,7 @@ func New(ctx context.Context, executor executor, cacheDir string, cacheFileMaxMb
+ 		if err = client.startService(ctx, executable); err != nil {
+ 			return nil, fmt.Errorf("Failed to start dependency scanner: %w", err)
+ 		}
++		started = true
+ 	}
+ 
+ 	type connectResponse struct {
+@@ -161,11 +210,13 @@ func New(ctx context.Context, executor executor, cacheDir string, cacheFileMaxMb
+ 		capabilities *pb.CapabilitiesResponse
+ 		err          error
+ 	}
+-	connectCh := make(chan connectResponse)
++	// A single buffered response avoids blocking the connector after cancellation.
++	// Do not close this channel without a result: a closed channel looks like a
++	// successful zero-value response in the readiness select below.
++	connectCh := make(chan connectResponse, 1)
+ 	ctx, cancel := context.WithTimeout(ctx, connTimeout)
+ 	defer cancel()
+ 	go func() {
+-		defer close(connectCh)
+ 		client, capabilities, err := connect(ctx, addr)
+ 		select {
+ 		case connectCh <- connectResponse{
+@@ -178,23 +229,87 @@ func New(ctx context.Context, executor executor, cacheDir string, cacheFileMaxMb
+ 	}()
+ 	select {
+ 	case <-ctx.Done():
+-		if err := client.stopService(1 * time.Second); err != nil {
+-			log.Errorf("error during depsscanner stop: %v", err)
+-		}
++		retryable = errors.Is(ctx.Err(), context.DeadlineExceeded)
+ 		return nil, fmt.Errorf("Failed to connect to dependency scanner service after %v seconds: %w", connTimeout.Seconds(), ctx.Err())
+-	case err := <-client.ch:
+-		return nil, fmt.Errorf("%v terminated during startup: %w", client.executable, err.Err)
++	case result := <-client.ch:
++		// The exit result has already been consumed; cleanup must not wait twice.
++		client.serviceStopped = result != nil
++		return nil, startupExitError(client.executable, result)
+ 	case c := <-connectCh:
++		if ctx.Err() != nil {
++			retryable = errors.Is(ctx.Err(), context.DeadlineExceeded)
++			return nil, fmt.Errorf("dependency scanner startup canceled before readiness: %w", ctx.Err())
++		}
+ 		if c.err != nil {
++			retryable = errors.Is(c.err, context.DeadlineExceeded) || shouldRetry(c.err)
+ 			return nil, fmt.Errorf("Failed to connect to dependency scanner service: %w", c.err)
+ 		}
++		if c.client == nil {
++			return nil, errors.New("dependency scanner connector returned no client")
++		}
++		select {
++		case result := <-client.ch:
++			client.serviceStopped = result != nil
++			return nil, startupExitError(client.executable, result)
++		default:
++		}
+ 		log.Infof("Connected to dependency scanner service on %v", client.address)
+ 		client.client = c.client
+ 		client.updateCapabilities(c.capabilities)
++		log.Infof("scandeps_startup phase=ready address=%q elapsed_ms=%d", ds.address, time.Since(startupTime).Milliseconds())
+ 		return client, nil
+ 	}
+ }
+ 
++func startupExitError(executable string, result *command.Result) error {
++	if result == nil {
++		return fmt.Errorf("%s terminated during startup: process result unavailable", executable)
++	}
++	if result.Err != nil {
++		return fmt.Errorf("%s terminated during startup (exit_code=%d): %w", executable, result.ExitCode, result.Err)
++	}
++	return fmt.Errorf("%s terminated during startup (exit_code=%d): process exited before readiness", executable, result.ExitCode)
++}
++
++// Each constructor attempt owns a private directory, not a shared derived socket
++// name. In-place restarts retain this address only after stopService confirms exit.
++func buildOwnedAddress(proxyAddress string) (address, dir string, err error) {
++	if ipc.GrpcCxxSupportsUDS && (strings.HasPrefix(proxyAddress, "unix://") || strings.HasPrefix(proxyAddress, "pipe://")) {
++		dir, err = os.MkdirTemp("", "reclient-ds-")
++		if err != nil {
++			return "", "", err
++		}
++		path := filepath.Join(dir, "ds.sock")
++		if len(path) < 108 {
++			if runtime.GOOS == "windows" {
++				return "unix:" + path, dir, nil
++			}
++			return "unix://" + path, dir, nil
++		}
++		if err := os.Remove(dir); err != nil {
++			return "", "", err
++		}
++		proxyAddress = localhost + ":0"
++	}
++	address, err = buildAddress(proxyAddress, findOpenPort)
++	return address, "", err
++}
++
++func (ds *DepsScannerClient) releaseOwnedSocket() error {
++	if ds.ownedSocketDir == "" {
++		return nil
++	}
++	// Never recursively remove a directory, or touch externally supplied endpoints.
++	if err := os.Remove(filepath.Join(ds.ownedSocketDir, "ds.sock")); err != nil && !os.IsNotExist(err) {
++		return err
++	}
++	if err := os.Remove(ds.ownedSocketDir); err != nil && !os.IsNotExist(err) {
++		return err
++	}
++	ds.ownedSocketDir = ""
++	return nil
++}
++
+ // buildAddress generates an address for the depsscanner process to listen on.
+ // The path is constructed as:
+ //
+@@ -339,11 +454,17 @@ func findOpenPort() (int, error) {
+ // It cleanly disconnects from the remote service and releases resource associated with
+ // DepsScannerClient.
+ func (ds *DepsScannerClient) Close() {
++	ds.m.Lock()
++	defer ds.m.Unlock()
+ 	if ds.client == nil {
+ 		return
+ 	}
+ 	if err := ds.stopService(shutdownTimeout); err != nil {
+ 		log.Errorf("%v", err)
++		return
++	}
++	if err := ds.releaseOwnedSocket(); err != nil {
++		log.Errorf("removing owned scanner socket: %v", err)
+ 	}
+ 	ds.client = nil
+ }
+@@ -519,9 +640,15 @@ func removeUDSFile(addr string) {
+ 	log.Infof("Successfully removed UDS socket file at %v", udsPath)
+ }
+ 
+-func (ds *DepsScannerClient) startService(ctx context.Context, executable string) error {
++func (ds *DepsScannerClient) startService(ctx context.Context, executable string) (err error) {
+ 	ctx, ds.terminate = context.WithCancel(ctx)
++	defer func() {
++		if err != nil {
++			ds.terminate() // ExecuteInBackground returns an error only before launch.
++		}
++	}()
+ 	ds.executable = executable
++	ds.serviceStopped = false
+ 
+ 	cmdArgs := []string{ds.executable, "--server_address", ds.address}
+ 	cmdArgs = append(cmdArgs, "--cache_dir", ds.cacheDir)
+@@ -554,7 +681,10 @@ func (ds *DepsScannerClient) startService(ctx context.Context, executable string
+ 		envVars["GLOG_log_dir"] = ds.logDir
+ 	}
+ 
+-	removeUDSFile(ds.address)
++	if ds.ownedSocketDir != "" {
++		// This private endpoint is only reused after the prior child has exited.
++		removeUDSFile(ds.address)
++	}
+ 
+ 	log.Infof("Starting service: %v", cmdArgs)
+ 	cmd := &command.Command{Args: cmdArgs}
+@@ -563,7 +693,8 @@ func (ds *DepsScannerClient) startService(ctx context.Context, executable string
+ 	}
+ 
+ 	ds.oe = &depsScannerLogger{}
+-	ds.ch = make(chan *command.Result)
++	// A late exit must not block the executor if bounded cleanup has timed out.
++	ds.ch = make(chan *command.Result, 1)
+ 
+ 	return ds.executor.ExecuteInBackground(ctx, cmd, ds.oe, ds.ch)
+ }
+@@ -588,13 +719,14 @@ func findKeyVal(envStr string, lookupEnvFunc func(string) (string, bool)) (strin
+ // If process is still running after a second `timeout` passed, an error will be returned.
+ // Note the total time before returning may be up to `2*timeout`.
+ func (ds *DepsScannerClient) stopService(timeout time.Duration) error {
+-	if ds.executable == "" {
++	if ds.executable == "" || ds.serviceStopped {
+ 		// Dependency scanner service wasn't started by reclient; nothing to do
+ 		return nil
+ 	}
+ 
+ 	// Dependency scanner service was started by reproxy; we must stop it
+-	ctx, cancel := context.WithTimeout(ds.ctx, timeout)
++	// Parent cancellation must not eliminate the independent cleanup deadline.
++	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+ 	defer cancel()
+ 	if ds.client != nil {
+ 		statusResponse, err := ds.client.Shutdown(ctx, &emptypb.Empty{})
+@@ -619,6 +751,11 @@ func (ds *DepsScannerClient) stopService(timeout time.Duration) error {
+ 	for i := 0; i < 2; i++ {
+ 		select {
+ 		case done := <-ds.ch:
++			if done == nil {
++				return fmt.Errorf("%s shutdown result unavailable", ds.executable)
++			}
++			ds.serviceStopped = true
++			log.Infof("scandeps_lifecycle phase=exit_confirmed address=%q exit_code=%d", ds.address, done.ExitCode)
+ 			if done.IsOk() {
+ 				log.Infof("%v successfully stopped", ds.executable)
+ 			} else {
