@@ -1,0 +1,28 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "bigquery",
+    srcs = ["bigquery.go"],
+    importpath = "github.com/bazelbuild/reclient/internal/pkg/bigquery",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/pkg/bigquerytranslator",
+        "@com_github_eapache_go_resiliency//retrier",
+        "@com_github_golang_glog//:glog",
+        "@com_google_cloud_go_bigquery//:bigquery",
+        "@org_golang_google_api//googleapi",
+        "@org_golang_google_api//option",
+        "@org_golang_google_grpc//credentials/oauth",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)
+
+go_test(
+    name = "bigquery_test",
+    srcs = ["bigquery_test.go"],
+    embed = [":bigquery"],
+    deps = [
+        "@com_github_eapache_go_resiliency//retrier",
+        "@org_golang_google_api//googleapi",
+    ],
+)

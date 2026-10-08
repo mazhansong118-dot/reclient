@@ -1,0 +1,18 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "reproxypid",
+    srcs = ["reproxypid.go"],
+    importpath = "github.com/bazelbuild/reclient/internal/pkg/reproxypid",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/pkg/subprocess",
+        "@com_github_golang_glog//:glog",
+    ],
+)
+
+go_test(
+    name = "reproxypid_test",
+    srcs = ["reproxypid_test.go"],
+    embed = [":reproxypid"],
+)

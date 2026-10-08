@@ -1,0 +1,28 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "reproxystatus",
+    srcs = ["reproxystatus.go"],
+    importpath = "github.com/bazelbuild/reclient/internal/pkg/reproxystatus",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/log",
+        "//api/proxy",
+        "//internal/pkg/ipc",
+        "@com_github_fatih_color//:color",
+    ],
+)
+
+go_test(
+    name = "reproxystatus_test",
+    srcs = ["reproxystatus_test.go"],
+    embed = [":reproxystatus"],
+    deps = [
+        "//api/log",
+        "//api/proxy",
+        "//internal/pkg/ipc",
+        "@com_github_google_go_cmp//cmp",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)

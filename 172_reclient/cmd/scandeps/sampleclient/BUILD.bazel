@@ -1,0 +1,30 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "sampleclient_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bazelbuild/reclient/cmd/scandeps/sampleclient",
+    tags = [
+        "manual",
+    ],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//api/scandeps",
+        "//internal/pkg/ipc",
+        "@com_github_golang_glog//:glog",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/emptypb",
+    ],
+)
+
+go_binary(
+    name = "sampleclient",
+    embed = [":sampleclient_lib"],
+    target_compatible_with = select({
+        "//:goma_input_processor_config": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+)

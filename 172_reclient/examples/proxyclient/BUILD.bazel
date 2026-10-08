@@ -1,0 +1,20 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "proxyclient_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bazelbuild/reclient/examples/proxyclient",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//api/proxy",
+        "@com_github_bazelbuild_remote_apis_sdks//go/api/command",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "proxyclient",
+    data = glob(["testdata/**"]),
+    embed = [":proxyclient_lib"],
+    visibility = ["//visibility:public"],
+)

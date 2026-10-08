@@ -1,0 +1,84 @@
+name: Build //:artifacts.tar
+run-name: Build //:artifacts.tar
+# This gives read-only access to the token.
+permissions: read-all
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+jobs:
+  bazel-build:
+    strategy:
+      matrix:
+        includescanner: ["goma", "clangscandeps"]
+        os:
+          - name: ubuntu-20.04
+          - name: macos-14
+            cpu: darwin_x86_64
+            platform: darwin_amd64_cgo
+          - name: macos-14
+            cpu: darwin_arm64
+            platform: darwin_arm64_cgo
+          - name: windows-2019
+
+    runs-on: ${{ matrix.os.name }}
+    continue-on-error: true # Allow other marix jobs to complete if one fails
+    steps:
+    # Clean up unused tools to have more disk space in the GitHub hosted runner.
+      - if: runner.os == 'Linux'
+        name: Free disk space
+        run: |
+            sudo rm -rf /usr/share/dotnet
+            sudo rm -rf /usr/local/lib/android
+      - if: runner.os == 'macOS'
+        name: Free disk space
+        run: |
+            sudo rm -rf "/Applications/Visual Studio.app"
+            sudo rm -rf "/Applications/Visual Studio 2019.app"
+            sudo rm -rf "/Users/runner/Library/Android/sdk"
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: '3.11'
+      - name: Get Bazel
+        uses: bazel-contrib/setup-bazel@e403ad507104847c3539436f64a9e9eecc73eeec # v0.8.5
+        with:
+          # Avoid downloading Bazel every time.
+          bazelisk-cache: true
+          # Store build cache per workflow.
+          disk-cache: ${{ github.workflow }} ${{ matrix.includescanner }}
+          # Share repository cache between workflows.
+          repository-cache: true
+      - if: matrix.os.cpu
+        name: Set --cpu
+        run: echo "--cpu=${{ matrix.os.cpu }}" >> /Users/runner/.bazelrc
+      - if: matrix.os.platform
+        name: Set --platforms
+        run: echo "--platforms=@io_bazel_rules_go//go/toolchain:${{ matrix.os.platform }}" >> /Users/runner/.bazelrc
+
+      # Checkout the depot tools they are needed by the goma repository
+      - if: runner.os != 'Windows'
+        name: Checkout depot tools
+        run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+      - if: runner.os != 'Windows'
+        name: Update PATH
+        run: echo "$(pwd)/depot_tools" >> $GITHUB_PATH
+      - if: runner.os == 'Windows'
+        name: Checkout depot tools (win)
+        run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git C:\src\depot_tools
+      - if: runner.os == 'macOS'
+        name: Remove Openssl
+        run: sudo rm -rf /usr/local/include/openssl /usr/local/lib/libcrypto.*
+      - if: runner.os == 'Windows'
+        name: Add depot tools to path (win)
+        run: |
+          Add-Content $env:GITHUB_ENV "BAZEL_SH=C:\MSYS64\usr\bin\bash.exe"
+          echo C:\MSYS64\usr\bin | Out-File -FilePath $env:GITHUB_PATH -Append
+          echo C:\msys64\mingw64\bin | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Bazel Build
+        run: bazel build --config=${{ matrix.includescanner }} --jobs=50 --//:use_android_glibc=true //:artifacts.tar

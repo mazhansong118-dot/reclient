@@ -1,0 +1,86 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("//:version.bzl", "VERSION_MAJOR", "VERSION_MINOR", "VERSION_PATCH")
+
+# gazelle:exclude *.h
+
+# We use a genrule instead of rules_go's built in x_defs support for workspace
+# status variables as they dont get stamped in binaries build for the host configuration.
+# This causes cross compiled builds to either fail if we build the binary for
+# the target configuration or not have the version stamped if built for the host configuration.
+
+genrule(
+    name = "stable_version_sha_txt",
+    outs = ["stable_version_sha.txt"],
+    cmd = "cat bazel-out/stable-status.txt | awk '/STABLE_VERSION_SHA/{{print $$2}}' > $@",
+    stamp = 1,
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "version_txt",
+    srcs = ["stable_version_sha.txt"],
+    outs = ["version.txt"],
+    cmd = "echo -n " + VERSION_MAJOR + "." + VERSION_MINOR + "." + VERSION_PATCH + ".$$(cat $(location stable_version_sha.txt) | cut -c 1-8) >>$@",
+    visibility = ["//visibility:public"],
+)
+
+copy_file(
+    name = "go_mod_txt",
+    src = "//:go.mod",
+    out = "go.mod.txt",
+)
+
+go_library(
+    name = "version",
+    srcs = ["version.go"],
+    embedsrcs = [
+        "version.txt",
+        "go.mod.txt",
+    ],
+    importpath = "github.com/bazelbuild/reclient/internal/pkg/version",
+    # This target changes with every git commit so it should not be depended on by any unit tests
+    visibility = ["//cmd:__subpackages__"],
+    deps = [
+        "//internal/pkg/rbeflag",
+        "@com_github_golang_glog//:glog",
+        "@org_golang_x_mod//modfile",
+    ],
+)
+
+go_test(
+    name = "version_test",
+    srcs = ["version_test.go"],
+    embed = [":version"],
+)
+
+genrule(
+    name = "version_h",
+    srcs = ["version.txt"],
+    outs = ["version.h"],
+    cmd = 'echo "#ifndef _INTERNAL_PKG_VERSION_VERSION_H" > $@;' +
+          'echo "# define _INTERNAL_PKG_VERSION_VERSION_H" >> $@;' +
+          'echo "# define RECLIENT_VERSION \\"$$(cat $(location version.txt))\\"" >> $@;' +
+          'echo "# define INPUT_PROCESSOR \\"' + select({
+              "//:clangscandeps_input_processor_config": "ClangscandepsIPService",
+              "//:goma_input_processor_config": "GomaIPService",
+          }) + '\\"" >> $@;' +
+          'echo "#endif // _INTERNAL_PKG_VERSION_VERSION_H" >> $@;',
+    stamp = 1,
+    target_compatible_with = select({
+        "//:goma_input_processor_config": [],
+        "//:clangscandeps_input_processor_config": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+cc_library(
+    name = "version_cc",
+    srcs = [
+        "version.h",
+    ],
+    hdrs = [
+        "version.h",
+    ],
+    visibility = ["//visibility:public"],
+)

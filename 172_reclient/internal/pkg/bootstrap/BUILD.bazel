@@ -1,0 +1,28 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bootstrap",
+    srcs = [
+        "bootstrap.go",
+        "sigint_unix.go",
+        "sigint_windows.go",
+    ],
+    importpath = "github.com/bazelbuild/reclient/internal/pkg/bootstrap",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proxy",
+        "//api/stats",
+        "//internal/pkg/event",
+        "//internal/pkg/ipc",
+        "//internal/pkg/reproxypid",
+        "@com_github_bazelbuild_remote_apis_sdks//go/api/command",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/command",
+        "@com_github_golang_glog//:glog",
+        "@org_golang_google_grpc//connectivity",
+    ] + select({
+        "@io_bazel_rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
+)

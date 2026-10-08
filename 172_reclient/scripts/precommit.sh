@@ -1,0 +1,81 @@
+#!/bin/sh
+# Copyright 2023 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Script to run gofmt, golint, and gazelle before commiting.
+# To install, use the following command:
+# ./scripts/install_precommit.sh
+
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=d | grep ".go$")
+
+# Ensures that non-interactive shell sessions can run Go tools
+if command -v go &>/dev/null; then
+    export PATH="$PATH:$(go env GOPATH)/bin"
+fi
+
+# Run go mod tidy
+bazelisk run @io_bazel_rules_go//go -- mod tidy
+bazelisk mod tidy
+
+GAZELLEPASS=true
+echo Running Gazelle...
+if ! bazelisk run --ui_event_filters=-info,-stderr --noshow_progress //:gazelle; then
+  GAZELLEPASS=false
+fi
+
+LINTPASS=true
+echo Running gofmt...
+bazelisk run --ui_event_filters=-info,-stderr --noshow_progress @io_bazel_rules_go//go -- fmt ./...
+STAGED_CPP_FILES="$(git diff --cached --name-only --diff-filter=d | grep "\.cc$\|\.h$")"
+if [ -n "$STAGED_CPP_FILES" ]; then
+  echo Running clang-format...
+  if ! command -v clang-format &> /dev/null; then
+    printf "\033[0;30m\033[41mclang-format not installed! Install clang-format.\033[0m\n"
+    LINTPASS=false
+  else
+    non_depot_tools_clang_format="$(which -a clang-format | grep -v depot_tools | head -1)"
+    if [ -z "$non_depot_tools_clang_format" ];then
+      printf "\033[0;30m\033[41mOnly depot_tools clang-format is installed! Install clang-format.\033[0m\n"
+      LINTPASS=false
+    else
+      $non_depot_tools_clang_format -style=google -i $STAGED_CPP_FILES
+    fi
+  fi
+fi
+
+
+PASS=true
+if ! $LINTPASS; then
+  printf "\033[0;30m\033[41mThere are lint errors. Please fix!\033[0m\n"
+  PASS=false
+fi
+
+if ! $GAZELLEPASS; then
+  printf "\033[0;30m\033[41mbazelisk run //:gazelle failed. Please fix the errors and try again.\033[0m\n"
+  PASS=false
+fi
+
+./scripts/regenpbgo.sh
+
+if ! git diff --exit-code &> /dev/null; then
+  printf "\033[0;30m\033[41mPrecommit made changes to source. Please check the changes and re-stage files.\033[0m\n"
+  PASS=false
+fi
+
+if ! $PASS; then
+  printf "\033[0;30m\033[41mCOMMIT FAILED\033[0m\n"
+  exit 1
+else
+  printf "\033[0;30m\033[42mCOMMIT SUCCEEDED\033[0m\n"
+fi

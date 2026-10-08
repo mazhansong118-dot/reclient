@@ -1,0 +1,27 @@
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@llvm_version//:defs.bzl", "LLVM_COMMIT")
+
+# Refer to go/rbe/dev/x/playbook/upgrading_clang_scan_deps if you are
+# running into a missing file error in this library when upgrading
+# clang-scan-deps version.
+CLANG_OPTIONS_FILE = "clang-options-" + LLVM_COMMIT[:6] + ".json"
+
+filegroup(
+    name = "clang-options",
+    srcs = [
+        CLANG_OPTIONS_FILE,
+    ],
+    visibility = ["//visibility:public"],
+)
+
+diff_test(
+    name = "clang_options_test",
+    file1 = CLANG_OPTIONS_FILE,
+    file2 = "@llvm-project//clang:clang-options.json",
+    # Test fails with file not found error on windows
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)

@@ -1,0 +1,36 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bootstrap_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bazelbuild/reclient/cmd/bootstrap",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//api/log",
+        "//api/stats",
+        "//internal/pkg/auth",
+        "//internal/pkg/bootstrap",
+        "//internal/pkg/event",
+        "//internal/pkg/logger",
+        "//internal/pkg/loghttp",
+        "//internal/pkg/pathtranslator",
+        "//internal/pkg/rbeflag",
+        "//internal/pkg/stats",
+        "//internal/pkg/version",
+        "@com_github_bazelbuild_remote_apis_sdks//go/api/command",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/command",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/credshelper",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/moreflag",
+        "@com_github_golang_glog//:glog",
+        "@org_golang_google_grpc//credentials/oauth",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_binary(
+    name = "bootstrap",
+    args = ["--re_proxy=$(location //cmd/reproxy:reproxy)"],
+    data = ["//cmd/reproxy"],
+    embed = [":bootstrap_lib"],
+    visibility = ["//visibility:public"],
+)

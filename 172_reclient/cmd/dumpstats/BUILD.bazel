@@ -1,0 +1,24 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "dumpstats_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bazelbuild/reclient/cmd/dumpstats",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//api/log",
+        "//internal/pkg/bootstrap",
+        "//internal/pkg/logger",
+        "//internal/pkg/rbeflag",
+        "//internal/pkg/stats",
+        "//internal/pkg/version",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/moreflag",
+        "@com_github_golang_glog//:glog",
+    ],
+)
+
+go_binary(
+    name = "dumpstats",
+    embed = [":dumpstats_lib"],
+    visibility = ["//visibility:public"],
+)

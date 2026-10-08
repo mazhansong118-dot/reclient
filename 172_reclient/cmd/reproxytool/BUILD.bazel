@@ -1,0 +1,25 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "reproxytool_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bazelbuild/reclient/cmd/reproxytool",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd/reproxytool/usage2csv",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/client",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/flags",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/tool",
+        "@com_github_golang_glog//:glog",
+    ],
+)
+
+go_binary(
+    name = "reproxytool",
+    embed = [":reproxytool_lib"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+)
