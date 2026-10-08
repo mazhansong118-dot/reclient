@@ -36,3 +36,10 @@ func TestVersionInExpectedFormat(t *testing.T) {
 		t.Fatalf("CurrentVersion()=%v not in expected format, match=%v, want %d matches, got %d", CurrentVersion(), matches, 1, len(matches))
 	}
 }
+
+func TestVersionIncludesLifecycleMarker(t *testing.T) {
+	const suffix = "-lifecycle-minimal.b305de73"
+	if v := CurrentVersion(); !strings.HasSuffix(v, suffix) {
+		t.Fatalf("CurrentVersion()=%q does not include local patch marker %q", v, suffix)
+	}
+}

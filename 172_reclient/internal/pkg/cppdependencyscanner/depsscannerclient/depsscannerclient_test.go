@@ -269,9 +269,9 @@ func TestNew_StartFailure(t *testing.T) {
 	}
 	select {
 	case <-stubExecutor.ctx.Done():
-		t.Error("New(): Unexpected Cancel() call")
+		// Failed launches must release their child context too.
 	default:
-		// No Cancel() call. Expected.
+		t.Error("New(): failed launch did not cancel its child context")
 	}
 }
 

@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-load("//:version.bzl", "VERSION_MAJOR", "VERSION_MINOR", "VERSION_PATCH")
+load("//:version.bzl", "VERSION_MAJOR", "VERSION_MINOR", "VERSION_PATCH", "VERSION_SUFFIX")
 
 # gazelle:exclude *.h
 
@@ -21,7 +21,7 @@ genrule(
     name = "version_txt",
     srcs = ["stable_version_sha.txt"],
     outs = ["version.txt"],
-    cmd = "echo -n " + VERSION_MAJOR + "." + VERSION_MINOR + "." + VERSION_PATCH + ".$$(cat $(location stable_version_sha.txt) | cut -c 1-8) >>$@",
+    cmd = "echo -n " + VERSION_MAJOR + "." + VERSION_MINOR + "." + VERSION_PATCH + ".$$(cat $(location stable_version_sha.txt) | cut -c 1-8)" + VERSION_SUFFIX + " >>$@",
     visibility = ["//visibility:public"],
 )
 

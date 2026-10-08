@@ -1,5 +1,39 @@
 # Remote Execution Client
 
+## Locally maintained 0.172 source
+
+This is the complete 0.172 source tree, based on upstream commit
+`fcf667882d53b3c98d0392613b6cfe80a4884af2` (GitOrigin-RevId
+`3cf60ba54e6e0e510da56d714142a949f86cd872`), with the scanner lifecycle
+fix applied directly to the source. Git commits are the change record.
+
+Run all build commands from this directory, not the enclosing 0.186 source
+tree. The Bazel version generator adds `-lifecycle-minimal.b305de73` to
+`0.172.0.<current-git-sha>`; `b305de73` identifies the production patch.
+Generated `version.txt`, `go.mod.txt`, and clang flags remain build outputs,
+not checked-in substitutes for the upstream generation steps.
+
+Scanner startup failures cancel and reap their owned child before a retry;
+unconfirmed cleanup blocks retries. Each launch uses a private socket
+directory, and normal shutdown waits for the child to exit. The two production
+source files match the previously accepted lifecycle candidate. The source
+version suffix is now also wired into the Bazel version generator.
+
+The regression tests are normal source files in
+`internal/pkg/cppdependencyscanner/depsscannerclient`:
+
+```shell
+go test -race -count=5 -timeout=180s -run '^(TestStartup|TestLifecycle)' ./internal/pkg/cppdependencyscanner/depsscannerclient
+TEST_REAL_SCANNER=/absolute/path/to/scandeps_server go test -race -count=5 -timeout=180s -run '^TestActualScannerStartupFailureAndRetry$' ./internal/pkg/cppdependencyscanner/depsscannerclient
+```
+
+The actual scanner test is Linux-only and opt-in; it starts and reaps its own
+children. It explicitly invokes the second library startup after an injected
+connection failure, rather than injecting a failure into the outer reproxy
+retry loop. The existing candidate passed the scoped lifecycle tests; importing
+this source tree does not claim a new complete Bazel build, full Android build,
+or remote backend execution acceptance.
+
 This repository contains a client implementation of
 [Remote Execution API](https://github.com/bazelbuild/remote-apis) that works
 with
